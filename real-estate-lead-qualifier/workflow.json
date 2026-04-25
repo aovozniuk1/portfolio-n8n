@@ -1,0 +1,290 @@
+{
+  "name": "Real Estate Lead Qualifier",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lead-intake",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook (Lead Intake)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "webhookId": "lead-intake-webhook"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "anthropicApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "anthropic-version", "value": "2023-06-01" },
+            { "name": "content-type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "model", "value": "claude-3-5-haiku-20241022" },
+            { "name": "max_tokens", "value": 200 },
+            {
+              "name": "system",
+              "value": "You are a real-estate lead qualifier. Classify each lead as exactly one of: Hot, Warm, Cold. Hot = budget >= $500K AND timeline_months <= 3 OR notes mention 'cash buyer' or 'pre-approved'. Warm = budget $200K-$500K OR timeline 3-12 months OR active interest expressed. Cold = budget < $200K OR timeline > 12 months OR vague interest. Reply with strict JSON: {\"classification\":\"Hot|Warm|Cold\",\"reasoning\":\"<one sentence>\"}. Never include any other text."
+            },
+            {
+              "name": "messages",
+              "value": "=[{\"role\":\"user\",\"content\":\"Lead data:\\nname: {{ $json.body.name }}\\nemail: {{ $json.body.email }}\\nphone: {{ $json.body.phone }}\\nproperty_interest: {{ $json.body.property_interest }}\\nbudget_usd: {{ $json.body.budget_usd }}\\ntimeline_months: {{ $json.body.timeline_months }}\\nnotes: {{ $json.body.notes }}\"}]"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "claude-classify",
+      "name": "Claude Classify",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 300],
+      "credentials": {
+        "anthropicApi": {
+          "id": "anthropic-api-creds",
+          "name": "Anthropic API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse Claude response, fall back to rule-based if Claude fails or returns invalid JSON\nconst claudeOutput = $input.item.json.content?.[0]?.text || '';\nconst lead = $('Webhook (Lead Intake)').item.json.body;\n\nlet classification, reasoning;\ntry {\n  const parsed = JSON.parse(claudeOutput);\n  classification = parsed.classification;\n  reasoning = parsed.reasoning;\n  if (!['Hot', 'Warm', 'Cold'].includes(classification)) throw new Error('Invalid classification');\n} catch (e) {\n  // Rule-based fallback\n  const budget = Number(lead.budget_usd) || 0;\n  const timeline = Number(lead.timeline_months) || 999;\n  if (budget >= 500000 && timeline <= 3) classification = 'Hot';\n  else if (budget >= 200000 || timeline <= 12) classification = 'Warm';\n  else classification = 'Cold';\n  reasoning = 'Fallback rule-based classification (Claude API unavailable or invalid response)';\n}\n\nreturn {\n  ...lead,\n  classification,\n  claude_reasoning: reasoning,\n  created_at: new Date().toISOString()\n};"
+      },
+      "id": "parse-classification",
+      "name": "Parse Classification (with fallback)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+                "combinator": "and",
+                "conditions": [
+                  { "leftValue": "={{ $json.classification }}", "rightValue": "Hot", "operator": { "type": "string", "operation": "equals" } }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "Hot"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+                "combinator": "and",
+                "conditions": [
+                  { "leftValue": "={{ $json.classification }}", "rightValue": "Warm", "operator": { "type": "string", "operation": "equals" } }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "Warm"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+                "combinator": "and",
+                "conditions": [
+                  { "leftValue": "={{ $json.classification }}", "rightValue": "Cold", "operator": { "type": "string", "operation": "equals" } }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "Cold"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "switch-on-class",
+      "name": "Switch on Classification",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "from": "whatsapp:+14155238886",
+        "to": "=whatsapp:{{ $json.phone }}",
+        "message": "=Hi {{ $json.name }}, thanks for your interest. Based on your budget ({{ $json.budget_usd }}) and timeline ({{ $json.timeline_months }} months), I'd love to set up a 15-min call this week. Pick a slot: https://calendly.com/yourhandle/intro\n\n— Your Real Estate Team"
+      },
+      "id": "twilio-whatsapp-hot",
+      "name": "Send Hot WhatsApp",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [1180, 180],
+      "credentials": {
+        "twilioApi": { "id": "twilio-creds", "name": "Twilio API" }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "send",
+        "sendTo": "={{ $json.email }}",
+        "subject": "Properties matching your search ({{ $json.property_interest }})",
+        "emailType": "html",
+        "message": "=<p>Hi {{ $json.name }},</p><p>Based on your interest in <strong>{{ $json.property_interest }}</strong> within ${{ $json.budget_usd }} and a timeline of {{ $json.timeline_months }} months, here are 3 listings that fit:</p><p>[Property listings — replace this template with your actual listings logic]</p><p>Reply to this email if you want to schedule a viewing.</p><p>— Your Real Estate Team</p>",
+        "options": {}
+      },
+      "id": "gmail-warm",
+      "name": "Send Warm Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [1180, 300],
+      "credentials": {
+        "gmailOAuth2": { "id": "gmail-oauth-creds", "name": "Gmail OAuth2" }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "record",
+        "operation": "upsert",
+        "base": { "__rl": true, "value": "appXXXXXXXXXXXXXX", "mode": "id" },
+        "table": { "__rl": true, "value": "tblNurture", "mode": "id" },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "name": "={{ $json.name }}",
+            "email": "={{ $json.email }}",
+            "phone": "={{ $json.phone }}",
+            "last_contact_at": "={{ $json.created_at }}",
+            "follow_up_due_at": "={{ DateTime.fromISO($json.created_at).plus({months: 3}).toISO() }}"
+          }
+        }
+      },
+      "id": "airtable-cold",
+      "name": "Airtable: Nurture List",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [1180, 420],
+      "credentials": {
+        "airtableTokenApi": { "id": "airtable-creds", "name": "Airtable API" }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "record",
+        "operation": "create",
+        "base": { "__rl": true, "value": "appXXXXXXXXXXXXXX", "mode": "id" },
+        "table": { "__rl": true, "value": "tblLeads", "mode": "id" },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "name": "={{ $json.name }}",
+            "email": "={{ $json.email }}",
+            "phone": "={{ $json.phone }}",
+            "property_interest": "={{ $json.property_interest }}",
+            "budget_usd": "={{ $json.budget_usd }}",
+            "timeline_months": "={{ $json.timeline_months }}",
+            "notes": "={{ $json.notes }}",
+            "classification": "={{ $json.classification }}",
+            "claude_reasoning": "={{ $json.claude_reasoning }}",
+            "created_at": "={{ $json.created_at }}"
+          }
+        }
+      },
+      "id": "airtable-master-log",
+      "name": "Airtable: Master Leads Log",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [1460, 300],
+      "credentials": {
+        "airtableTokenApi": { "id": "airtable-creds", "name": "Airtable API" }
+      }
+    },
+    {
+      "parameters": {
+        "channel": "#ops-alerts",
+        "text": "=:rotating_light: Real Estate Lead Qualifier workflow error.\n\n*Lead:* {{ $('Webhook (Lead Intake)').item.json.body.name }} ({{ $('Webhook (Lead Intake)').item.json.body.email }})\n*Failed node:* {{ $execution.error.node?.name || 'unknown' }}\n*Error:* ```{{ $execution.error.message || 'no message' }}```\n\nManual follow-up required.",
+        "otherOptions": {}
+      },
+      "id": "slack-error-alert",
+      "name": "Slack Error Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [680, 540],
+      "credentials": {
+        "slackApi": { "id": "slack-creds", "name": "Slack Webhook" }
+      },
+      "executeOnce": false,
+      "alwaysOutputData": false,
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"status\": \"ok\", \"classification\": \"{{ $('Parse Classification (with fallback)').item.json.classification }}\" }",
+        "options": {}
+      },
+      "id": "respond-to-webhook",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1680, 300]
+    }
+  ],
+  "connections": {
+    "Webhook (Lead Intake)": {
+      "main": [[{ "node": "Claude Classify", "type": "main", "index": 0 }]]
+    },
+    "Claude Classify": {
+      "main": [[{ "node": "Parse Classification (with fallback)", "type": "main", "index": 0 }]]
+    },
+    "Parse Classification (with fallback)": {
+      "main": [[{ "node": "Switch on Classification", "type": "main", "index": 0 }]]
+    },
+    "Switch on Classification": {
+      "main": [
+        [{ "node": "Send Hot WhatsApp", "type": "main", "index": 0 }],
+        [{ "node": "Send Warm Email", "type": "main", "index": 0 }],
+        [{ "node": "Airtable: Nurture List", "type": "main", "index": 0 }]
+      ]
+    },
+    "Send Hot WhatsApp": {
+      "main": [[{ "node": "Airtable: Master Leads Log", "type": "main", "index": 0 }]]
+    },
+    "Send Warm Email": {
+      "main": [[{ "node": "Airtable: Master Leads Log", "type": "main", "index": 0 }]]
+    },
+    "Airtable: Nurture List": {
+      "main": [[{ "node": "Airtable: Master Leads Log", "type": "main", "index": 0 }]]
+    },
+    "Airtable: Master Leads Log": {
+      "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "self"
+  },
+  "staticData": null,
+  "tags": [
+    { "name": "real-estate" },
+    { "name": "lead-qualification" },
+    { "name": "claude" },
+    { "name": "production-ready" }
+  ],
+  "triggerCount": 1,
+  "versionId": "1.0.0",
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": "portfolio-n8n-real-estate-lead-qualifier"
+  }
+}
