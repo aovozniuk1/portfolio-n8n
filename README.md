@@ -45,6 +45,5 @@ MIT — use, modify, resell. Attribution appreciated, not required.
 
 I'm Andrii Vozniuk, a Senior QA Automation Engineer with 9 years of production experience (currently at N-iX, Kyiv). I work at the intersection of QA reliability practices and modern automation — n8n workflows, LLM-integrated test infrastructure, and CI pipelines that don't break at 2am.
 
-- LinkedIn: https://www.linkedin.com/in/[handle]/
 - GitHub: https://github.com/aovozniuk1
 - Other portfolios: [QA frameworks](https://github.com/aovozniuk1/portfolio-qa) · [Python dev / FastAPI / RAG](https://github.com/aovozniuk1/portfolio-dev)
